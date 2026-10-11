@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1620">
+<title>Matchup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0d1620;--card:#15222f;--line:#243445;--ink:#e8eef4;--mute:#8da0b2;--a:#5fb4ff;--b:#f4b63f;--good:#5bd69b;--bad:#ef7b72;
+ --f:'Barlow',system-ui,sans-serif;--fc:'Barlow Condensed','Barlow',system-ui,sans-serif}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.45 var(--f)}
+body{padding:env(safe-area-inset-top) 14px calc(28px + env(safe-area-inset-bottom));max-width:760px;margin:0 auto}
+h1{font:700 30px var(--fc);margin:18px 0 2px}.sub{color:var(--mute);margin:0 0 14px;font-size:14px}
+.pick{display:grid;gap:8px;margin-bottom:12px}
+label{font-size:13px;color:var(--mute)}
+input,select{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit}
+input:focus,select:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+#pa{border-left:5px solid var(--a)}#pb{border-left:5px solid var(--b)}
+button{padding:13px;border-radius:10px;border:0;background:var(--ink);color:var(--bg);font:600 16px var(--f);width:100%}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:14px}
+.card h2{font:600 15px var(--f);color:var(--mute);margin:0 0 10px}
+.vs{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:start}
+.nm{font:700 34px/1 var(--fc)}.A .nm{color:var(--a)}.B{text-align:right}.B .nm{color:var(--b)}
+.rk{color:var(--mute);font-size:14px;margin-top:4px}.x{color:var(--mute);padding-top:10px}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.B .tags{justify-content:flex-end}
+.tag{font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--ink)}
+.arch{font:600 15px var(--f);margin-top:6px}
+.prob{display:flex;height:46px;border-radius:10px;overflow:hidden;font:700 24px/46px var(--fc)}
+.prob div{padding:0 12px;color:#06101a;min-width:0;white-space:nowrap}.pa{background:var(--a)}.pb{background:var(--b);text-align:right}
+.row{display:grid;grid-template-columns:1fr 1.5fr 1fr;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:15px}
+.row:first-of-type{border-top:0}.row .l{text-align:center;color:var(--mute);font-size:13px}.row .v2{text-align:right}
+.row .win{font-weight:600}.A .win{color:var(--a)}
+.big{font:700 40px/1 var(--fc)}.mut{color:var(--mute);font-size:14px}
+ul{margin:0;padding-left:18px}li{margin:6px 0}li.neg{color:var(--mute)}
+.note{color:var(--mute);font-size:13px;margin-top:10px}
+a{color:var(--a)}.err{color:var(--bad)}
+@media (max-width:420px){.nm{font-size:27px}}
+</style></head><body>
+<h1>Matchup</h1>
+<p class="sub">Pick two players and a court. Data refreshes automatically from Tennis Abstract and courtspeed.com.</p>
+<div class="pick">
+ <div><label for="pa">Player 1</label><input id="pa" list="pl" placeholder="Start typing a name" autocomplete="off"></div>
+ <div><label for="pb">Player 2</label><input id="pb" list="pl" placeholder="Start typing a name" autocomplete="off"></div>
+ <div><label for="court">Court</label><select id="court"></select></div>
+ <div><label for="bo">Format</label><select id="bo"><option value="auto">Automatic (best of 5 at Grand Slams)</option><option value="3">Best of 3</option><option value="5">Best of 5</option></select></div>
+ <button id="go">Compare</button>
+</div>
+<datalist id="pl"></datalist>
+<div id="out"></div>
+<p class="note" id="stamp"></p>
+<script src="model.js"></script>
+<script>
+const $=s=>document.querySelector(s), SURF=['Hard','Clay','Grass'];
+const num=s=>{if(s==null)return NaN;const m=String(s).replace(/,/g,'').match(/-?\d+(\.\d+)?/);return m?parseFloat(m[0]):NaN};
+const fin=Number.isFinite, esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const norm=s=>String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z]/g,'');
+let IDX=null,COURTS=null,COURT_LIST=[];
+const getJSON=async u=>{const r=await fetch(u,{cache:'no-cache'});if(!r.ok)throw new Error(u+' '+r.status);return r.json()};
+
+async function init(){
+  try{IDX=await getJSON('data/index.json')}catch(e){$('#out').innerHTML='<div class="card err">No data yet. Run the update job once (see README), then reload.</div>';return}
+  try{COURTS=await getJSON('data/courts.json')}catch(e){COURTS=null}
+  const have=IDX.players.filter(p=>p.has_data);
+  $('#pl').innerHTML=have.map(p=>`<option value="${esc(p.name)}">#${p.ta_rank||p.rank}</option>`).join('');
+  buildCourts();
+  $('#stamp').textContent='Data updated '+new Date(IDX.updated).toLocaleString()+' · '+have.length+' players';
+}
+function buildCourts(){
+  COURT_LIST=[];
+  const t=COURTS&&COURTS.cpi;
+  if(t)t.rows.forEach(r=>{
+    const raw=(r[0]||'').replace('◆','').trim(), m=raw.match(/(Hard · indoor|Hard|Clay|Grass)\s*$/); if(!m)return;
+    const vals=r.slice(1), last3=t.headers[t.headers.length-1]==='3yr'?num(vals[vals.length-1]):NaN;
+    const yrs=vals.slice(0,t.headers[t.headers.length-1]==='3yr'?-1:undefined).map(num).filter(fin);
+    COURT_LIST.push({name:raw.slice(0,m.index).trim(),surface:m[1].startsWith('Hard')?'Hard':m[1],indoor:m[1].includes('indoor'),cpi:yrs.length?yrs[yrs.length-1]:NaN,cpi3:last3});
+  });
+  const o=['<option value="g:Hard">Any hard court</option><option value="g:Clay">Any clay court</option><option value="g:Grass">Any grass court</option>'];
+  COURT_LIST.forEach((c,i)=>o.push(`<option value="t:${i}">${esc(c.name)} (${c.surface}${c.indoor?', indoor':''})</option>`));
+  $('#court').innerHTML=o.join('');
+}
+function courtRow(key,name){
+  const t=COURTS&&COURTS[key]; if(!t)return null; const k=norm(name).slice(0,7);
+  const r=t.rows.find(r=>norm(r[0]||'').includes(k)); if(!r)return null;
+  const h=t.headers, vals=r.map((v,i)=>({h:h[i],v})).slice(1);
+  const three=vals.find(x=>x.h==='3yr'&&fin(num(x.v)));
+  if(three)return{label:'3-year avg',v:num(three.v)};
+  const l=[...vals].reverse().find(x=>fin(num(x.v))); return l?{label:l.h,v:num(l.v)}:null;
+}
+const loadP=async name=>{
+  const e=IDX.players.find(p=>p.has_data&&norm(p.name)===norm(name)); if(!e)throw new Error('No data for "'+name+'"');
+  return getJSON('data/players/'+e.slug+'.json');
+};
+// ---- stats ----
+function surfRow(arr,s){return (arr||[]).find(r=>(r.Split||'').toLowerCase().startsWith(s.toLowerCase()))}
+function stat(p,s,k,isPct=true){
+  const f=r=>r?num(r[k]):NaN, a=surfRow(p.splits_last52,s), c=surfRow(p.splits_career,s);
+  const va=f(a), vc=f(c), ma=a?num(a.M)||0:0; let v;
+  if(fin(va)&&fin(vc)){const w=ma/(ma+20);v=w*va+(1-w)*vc}else if(fin(va))v=va;else if(fin(vc))v=vc;
+  else{const rows=(p.splits_last52||[]).filter(r=>SURF.some(x=>(r.Split||'').startsWith(x))&&fin(num(r[k])));
+    let n=0,t=0;rows.forEach(r=>{const m=num(r.M)||1;n+=m;t+=m*num(r[k])});v=n?t/n:NaN}
+  return isPct?v/100:v;
+}
+function archetype(sv,rt,rally){
+  const S=sv-0.645,R=rt-0.355;
+  if(S>=.03&&R>=.0)return'All-court';if(S>=.03)return'Big server';if(R>=.025&&(!fin(rally)||rally>=3.8))return'Grinder-returner';if(R>=.025)return'Returner';if(fin(rally)&&rally>=4.4)return'Baseline grinder';return'Balanced';
+}
+function tags(p,s){const t=[],a=stat(p,s,'A%')*100,fi=stat(p,s,'1stIn')*100,s2=stat(p,s,'2nd%')*100,br=stat(p,s,'Brk%')*100;
+  if(a>=10)t.push('High ace rate');if(fi&&fi<58)t.push('Low first-serve %');if(s2>=54)t.push('Strong second serve');if(br>=24)t.push('Breaks often');if(br&&br<17)t.push('Rarely breaks');return t.slice(0,3)}
+function parseDate(s){const m=String(s).match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})/);return m?new Date(`${m[2]} ${m[1]}, ${m[3]} 12:00:00`):null}
+function load(p){
+  const now=new Date(),rows=(p.recent||[]).map(r=>({d:parseDate(r.Date),t:r.Time,dr:num(r.DR),tour:r.Tournament,surf:r.Surface})).filter(r=>r.d);
+  const played=rows.filter(r=>r.t&&/\d:\d\d/.test(r.t)).map(r=>{const[h,m]=r.t.split(':').map(Number);return{...r,min:h*60+m,days:(now-r.d)/864e5}});
+  const w14=played.filter(r=>r.days<=14),dr10=played.slice(0,10).map(r=>r.dr).filter(fin);
+  const seasonDR=num((p.seasons&&p.seasons[0]||{}).DR);
+  return{matches14:w14.length,min14:w14.reduce((a,r)=>a+r.min,0),since:played.length?Math.floor(played[0].days):NaN,
+    form:dr10.length?dr10.reduce((a,b)=>a+b,0)/dr10.length:NaN,seasonDR,
+    tours21:new Set(played.filter(r=>r.days<=21).map(r=>r.tour)).size,lastSurf:played.length?played[0].surf:''};
+}
+function avgField(arr,k,n=8){const v=(arr||[]).slice(0,n).map(r=>num(r[k])).filter(fin);return v.length?v.reduce((a,b)=>a+b,0)/v.length:NaN}
+function h2h(p,opp){const k=norm(opp);const r=(p.h2h||[]).find(r=>norm(r.Opponent||'')===k);return r?{w:num(r.W),l:num(r.L),first:r.First,last:r.Last}:null}
+const f1=(v,d=1)=>fin(v)?v.toFixed(d):'–', pc=(v,d=1)=>fin(v)?(v*100).toFixed(d)+'%':'–';
+function row(l,a,b,fa,fb,hi=true){const wa=fin(a)&&fin(b)&&(hi?a>b:a<b),wb=fin(a)&&fin(b)&&(hi?b>a:b<a);
+  return`<div class="row"><div class="${wa?'win':''}">${fa}</div><div class="l">${l}</div><div class="v2 ${wb?'win':''}" style="${wb?'color:var(--b)':''}">${fb}</div></div>`}
+
+async function run(){
+  const out=$('#out'); out.innerHTML='<div class="card">Loading…</div>';
+  let A,B;
+  try{[A,B]=await Promise.all([loadP($('#pa').value),loadP($('#pb').value)])}catch(e){out.innerHTML=`<div class="card err">${esc(e.message)}. Pick names from the suggestions.</div>`;return}
+  if(A.slug===B.slug){out.innerHTML='<div class="card err">Pick two different players.</div>';return}
+  const sel=$('#court').value; let court=null,surface;
+  if(sel.startsWith('t:')){court=COURT_LIST[+sel.slice(2)];surface=court.surface}else surface=sel.slice(2);
+  const slam=court&&/Australian|Roland|Wimbledon|US Open/i.test(court.name); const bo=$('#bo').value==='auto'?(slam?5:3):+$('#bo').value;
+  const S=p=>({sp:stat(p,surface,'SPW'),rp:stat(p,surface,'RPW'),hold:stat(p,surface,'Hld%'),brk:stat(p,surface,'Brk%'),ace:stat(p,surface,'A%'),win:stat(p,surface,'Win%'),dr:stat(p,surface,'DR',false)});
+  const a=S(A),b=S(B),ok=[a.sp,a.rp,b.sp,b.rp].every(fin);
+  if(!ok){out.innerHTML='<div class="card err">Serve/return numbers are missing for one player, so no probability can be calculated.</div>';return}
+  const mw=matchWin(a.sp,a.rp,b.sp,b.rp,bo); let pA=mw.p, eloNote='';
+  const eA=A.info&&A.info.elo,eB=B.info&&B.info.elo;
+  if(fin(eA)&&fin(eB)){const pe=1/(1+Math.pow(10,(eB-eA)/400));pA=0.6*mw.p+0.4*pe;eloNote=` Blended 60/40 with Elo (${eA} v ${eB}).`}
+  const rA=avgField(A.ch_rally,'RallyLen'),rB=avgField(B.ch_rally,'RallyLen'),nA=avgField(A.ch_tactics,'Net Freq'),nB=avgField(B.ch_tactics,'Net Freq');
+  const LA=load(A),LB=load(B),H=h2h(A,B.name),H2=h2h(B,A.name);
+  const ra=archetype(a.sp,a.rp,rA),rb=archetype(b.sp,b.rp,rB);
+  // ---- reasons ----
+  const fav=pA>=.5?'A':'B',F=fav==='A'?A:B,U=fav==='A'?B:A,fs=fav==='A'?a:b,us=fav==='A'?b:a,sg=fav==='A'?1:-1;
+  const R=[];const last=n=>n.split(' ').slice(-1)[0];
+  if(fin(eA)&&fin(eB)&&Math.abs(eA-eB)>=40)R.push([Math.abs(eA-eB)/10,`Overall level: ${last((eA>eB?A:B).name)} is rated higher on Elo (${Math.max(eA,eB)} v ${Math.min(eA,eB)}).`,eA>eB?'A':'B']);
+  if(fin(a.win)&&fin(b.win)&&Math.abs(a.win-b.win)>=.06)R.push([Math.abs(a.win-b.win)*100,`${surface} form: ${last((a.win>b.win?A:B).name)} wins ${pc(Math.max(a.win,b.win),0)} of matches on ${surface.toLowerCase()} against ${pc(Math.min(a.win,b.win),0)}.`,a.win>b.win?'A':'B']);
+  const holdEdge=mw.hA-mw.hB; R.push([Math.abs(holdEdge)*100,`Serve v return in this pairing: ${last(A.name)} holds ${pc(mw.hA,0)} of service games, ${last(B.name)} ${pc(mw.hB,0)}.`,holdEdge>0?'A':'B']);
+  if(H&&H.w+H.l>=3)R.push([Math.abs(H.w-H.l)*4,`Head-to-head: ${last(A.name)} ${H.w}–${H.l} (${H.first||''}–${H.last||''}).`,H.w>H.l?'A':H.l>H.w?'B':'']);
+  if(fin(LA.form)&&fin(LB.form)&&Math.abs(LA.form-LB.form)>=.1)R.push([Math.abs(LA.form-LB.form)*40,`Recent form: ${last((LA.form>LB.form?A:B).name)} has been more dominant in the last 10 matches (dominance ratio ${f1(Math.max(LA.form,LB.form),2)} v ${f1(Math.min(LA.form,LB.form),2)}).`,LA.form>LB.form?'A':'B']);
+  if(Math.abs(LA.min14-LB.min14)>=120)R.push([Math.abs(LA.min14-LB.min14)/15,`Workload: ${last((LA.min14>LB.min14?A:B).name)} has played ${Math.round(Math.max(LA.min14,LB.min14)/60)}h on court in 14 days v ${Math.round(Math.min(LA.min14,LB.min14)/60)}h.`,LA.min14>LB.min14?'B':'A']);
+  const forFav=R.filter(r=>r[2]===fav).sort((x,y)=>y[0]-x[0]),against=R.filter(r=>r[2]&&r[2]!==fav).sort((x,y)=>y[0]-x[0]);
+  const q=n=>'https://www.google.com/search?tbm=nws&q='+encodeURIComponent(n+' injury')
+  const cur=court?`<div class="big">${f1(court.cpi,1)}</div><div class="mut">Court Pace Index, latest edition${fin(court.cpi3)?` · 3-year ${f1(court.cpi3,1)}`:''}</div>`:`<div class="mut">Generic ${surface.toLowerCase()} court. Pick a tournament for its speed.</div>`;
+  const extra=court?[['ace','Ace rate (%)'],['rally','Rally length (shots)']].map(([k,l])=>{const r=courtRow(k,court.name);return r?`<div class="mut">${l}: <b>${f1(r.v,1)}</b> (${esc(r.label)})</div>`:''}).join(''):'';
+  const wx=court&&courtRow('weather',court.name)?'':'';
+  const pAp=Math.round(pA*100);
+  out.innerHTML=`
+  <div class="card"><div class="vs"><div class="A"><div class="nm">${esc(A.name)}</div><div class="rk">${A.info.rank?'World No. '+A.info.rank:''}</div><div class="arch">${ra}</div><div class="tags">${tags(A,surface).map(t=>`<span class="tag">${t}</span>`).join('')}</div></div><div class="x">v</div>
+  <div class="B"><div class="nm">${esc(B.name)}</div><div class="rk">${B.info.rank?'World No. '+B.info.rank:''}</div><div class="arch">${rb}</div><div class="tags">${tags(B,surface).map(t=>`<span class="tag">${t}</span>`).join('')}</div></div></div>
+  <p class="mut" style="margin:12px 0 0">${esc(court?court.name+' · ':'')}${surface}${court&&court.indoor?' indoor':''} · best of ${bo}</p></div>
+  <div class="card"><h2>Win probability</h2><div class="prob"><div class="pa" style="width:${pAp}%">${pAp}%</div><div class="pb" style="width:${100-pAp}%">${100-pAp}%</div></div>
+  <p class="note">Model: point-by-point match simulation from each player's blended ${surface.toLowerCase()} serve and return numbers.${eloNote} It is a heuristic, not a betting tip.</p></div>
+  <div class="card"><h2>Why ${esc(F.name)} is favoured</h2><ul>${forFav.map(r=>`<li>${esc(r[1])}</li>`).join('')||'<li>No single factor stands out. This is close.</li>'}</ul>
+  ${against.length?`<h2 style="margin-top:14px">What favours ${esc(U.name)}</h2><ul>${against.map(r=>`<li class="neg">${esc(r[1])}</li>`).join('')}</ul>`:''}</div>
+  <div class="card"><h2>Serve and return on ${surface.toLowerCase()}</h2>
+   ${row('Serve points won',a.sp,b.sp,pc(a.sp),pc(b.sp))}${row('Return points won',a.rp,b.rp,pc(a.rp),pc(b.rp))}
+   ${row('Hold %',a.hold,b.hold,pc(a.hold,0),pc(b.hold,0))}${row('Break %',a.brk,b.brk,pc(a.brk,0),pc(b.brk,0))}
+   ${row('Ace %',a.ace,b.ace,pc(a.ace),pc(b.ace))}${row('Win % on surface',a.win,b.win,pc(a.win,0),pc(b.win,0))}
+   ${row('Avg rally length',rA,rB,f1(rA),f1(rB),false)}${row('Net approaches',nA,nB,fin(nA)?f1(nA)+'%':'–',fin(nB)?f1(nB)+'%':'–')}
+   <p class="note">Rally and net numbers come from charted matches only (last 8 charted). Style labels are this app's own classification.</p></div>
+  <div class="card"><h2>Head-to-head</h2>${H?`<div class="big">${H.w}–${H.l}</div><div class="mut">${esc(A.name)} v ${esc(B.name)}, ${esc(H.first||'')}–${esc(H.last||'')}</div>`:(H2?`<div class="big">${H2.l}–${H2.w}</div><div class="mut">${esc(A.name)} v ${esc(B.name)}</div>`:'<div class="mut">No recorded meetings.</div>')}</div>
+  <div class="card"><h2>Court</h2>${cur}${extra}</div>
+  <div class="card"><h2>Form, workload and travel</h2>
+   ${row('Matches, last 14 days',LA.matches14,LB.matches14,LA.matches14,LB.matches14,false)}${row('Hours on court, 14 days',LA.min14,LB.min14,f1(LA.min14/60),f1(LB.min14/60),false)}
+   ${row('Days since last match',LA.since,LB.since,fin(LA.since)?LA.since:'–',fin(LB.since)?LB.since:'–')}${row('Tournaments, last 21 days',LA.tours21,LB.tours21,LA.tours21,LB.tours21,false)}
+   ${row('Last 10 matches (dominance)',LA.form,LB.form,f1(LA.form,2),f1(LB.form,2))}
+   <p class="note">Injury status is not in the data. Check the latest news: <a href="${q(A.name)}" target="_blank" rel="noopener">${esc(A.name)}</a> · <a href="${q(B.name)}" target="_blank" rel="noopener">${esc(B.name)}</a></p></div>
+  <p class="note">Data: Tennis Abstract (Jeff Sackmann) and courtspeed.com. Personal, non-commercial use. Pulled ${new Date(A.fetched_at).toLocaleString()}.</p>`;
+}
+$('#go').addEventListener('click',run);
+['#pa','#pb'].forEach(s=>$(s).addEventListener('keydown',e=>{if(e.key==='Enter')run()}));
+init();
+</script></body></html>
