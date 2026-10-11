@@ -2,7 +2,7 @@ name: Update tennis data
 on:
   schedule:
     - cron: "0 */6 * * *"
-"      # hver 6. time: 00, 06, 12, 18 UTC
+    # hver 6. time: 00, 06, 12, 18 UTC
   workflow_dispatch:         # lets you start it by hand from the GitHub app
     inputs:
       top:
