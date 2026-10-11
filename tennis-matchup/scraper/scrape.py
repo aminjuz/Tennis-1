@@ -4,8 +4,8 @@ into data/*.json using a headless browser (the pages are drawn by JavaScript).
 
   python scraper/scrape.py                 # courts + top 100 players
   python scraper/scrape.py --top 200
-  python scraper/scrape.py --only FrancesTiafoe BenShelton
-  python scraper/scrape.py --debug --only FrancesTiafoe   # also saves raw tables
+  python scraper/scrape.py --
+  python scraper/scrape.py --debug    # also saves raw tables
 """
 import argparse, datetime as dt, json, pathlib, re, sys, time
 
