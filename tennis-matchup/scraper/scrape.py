@@ -9,9 +9,9 @@ into data/*.json using a headless browser (the pages are drawn by JavaScript).
 """
 import argparse, datetime as dt, json, pathlib, re, sys, time
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(_file_).resolve().parent.parent
 DATA = ROOT / "data"
-TA = "https://www.tennisabstract.com/cgi-bin/player.cgi?p={}"
+TA = "https://www.tennisabstract.com/cgi-bin/player-classic.cgi?p={}"
 COURT_PAGES = {"cpi": "https://courtspeed.com/", "ace": "https://courtspeed.com/ace-rate",
                "rally": "https://courtspeed.com/rally-length", "weather": "https://courtspeed.com/weather-altitude"}
 TABS = ["Last 52 Weeks Splits", "Career Splits", "Charting: Serve", "Charting: Return",
@@ -93,14 +93,27 @@ def dump_page(page, click=()):
     return page.evaluate(DUMP_JS), page.evaluate(TEXT_JS)
 
 def scrape_player(page, slug):
-    page.goto(TA.format(slug), wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_selector("table", timeout=30000)
-    page.wait_for_timeout(1500)
-    tables, text = dump_page(page, TABS)
-    data = parse_player(tables, text)
-    if "recent" not in data or not data.get("seasons"):
-        raise RuntimeError("page did not contain the expected tables")
-    return data, tables
+    last = None
+    for attempt in range(2):
+        try:
+            page.goto(TA.format(slug), wait_until="load", timeout=60000)
+            page.wait_for_selector("table", state="attached", timeout=45000)
+            page.wait_for_timeout(2500)
+            tables, text = dump_page(page, TABS)
+            data = parse_player(tables, text)
+            if "recent" not in data or not data.get("seasons"):
+                raise RuntimeError("page loaded but expected tables missing; tables found: %d" % len(tables))
+            return data, tables
+        except Exception as e:
+            last = e
+            try:
+                title = page.title()
+                snippet = page.evaluate("() => document.body.innerText.slice(0, 250)").replace("\n", " ")
+                print(f"  diag [{slug}] title={title!r} body={snippet!r}", flush=True)
+            except Exception:
+                pass
+            if attempt == 0: page.wait_for_timeout(8000)
+    raise last
 
 def scrape_courts(page):
     courts = {}
@@ -112,14 +125,14 @@ def scrape_courts(page):
             courts[key] = parse_court_table(best) if best else None
         except Exception as e:
             courts[key] = None; print(f"  courts/{key}: {e}", file=sys.stderr)
-    courts["fetched_at"] = dt.datetime.utcnow().isoformat() + "Z"
+    courts["fetched_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     return courts
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=100)
     ap.add_argument("--only", nargs="*")
-    ap.add_argument("--delay", type=float, default=2.5, help="seconds between players")
+    ap.add_argument("--delay", type=float, default=4.0, help="seconds between players")
     ap.add_argument("--no-courts", action="store_true")
     ap.add_argument("--debug", action="store_true")
     a = ap.parse_args()
@@ -127,21 +140,22 @@ def main():
     seed = json.load(open(ROOT / "scraper" / "players_seed.json"))["players"]
     todo = [p for p in seed if (p["slug"] in a.only if a.only else p["rank"] <= a.top)]
     (DATA / "players").mkdir(parents=True, exist_ok=True)
-    errors = {}
+    errors = {}; streak = 0
     with sync_playwright() as pw:
         br = pw.chromium.launch()
-        page = br.new_context(user_agent="Mozilla/5.0 (matchup-app personal, non-commercial)").new_page()
+        page = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", locale="en-US").new_page()
         if not a.no_courts:
             (DATA / "courts.json").write_text(json.dumps(scrape_courts(page)))
         for p in todo:
             try:
                 data, raw = scrape_player(page, p["slug"])
-                data.update(name=p["name"], slug=p["slug"], fetched_at=dt.datetime.utcnow().isoformat() + "Z")
+                data.update(name=p["name"], slug=p["slug"], fetched_at=dt.datetime.now(dt.timezone.utc).isoformat())
                 (DATA / "players" / f"{p['slug']}.json").write_text(json.dumps(data))
                 if a.debug: (DATA / f"raw_{p['slug']}.json").write_text(json.dumps(raw))
-                print("ok  ", p["name"])
+                print("ok  ", p["name"], flush=True); streak = 0
             except Exception as e:
-                errors[p["slug"]] = str(e)[:200]; print("FAIL", p["name"], e, file=sys.stderr)
+                errors[p["slug"]] = str(e)[:200]; streak += 1; print("FAIL", p["name"], str(e)[:120], flush=True)
+                if streak >= 5: print("5 failures in a row, stopping. See diag lines above.", flush=True); break
             time.sleep(a.delay)
         br.close()
     # index: every seed player, flagged when we hold data for them
@@ -152,9 +166,9 @@ def main():
         if f.exists():
             d = json.load(open(f)); item["fetched_at"] = d.get("fetched_at"); item["ta_rank"] = d.get("info", {}).get("rank")
         idx.append(item)
-    (DATA / "index.json").write_text(json.dumps({"updated": dt.datetime.utcnow().isoformat() + "Z", "players": idx}))
+    (DATA / "index.json").write_text(json.dumps({"updated": dt.datetime.now(dt.timezone.utc).isoformat(), "players": idx}))
     (DATA / "errors.json").write_text(json.dumps(errors, indent=1))
     print(f"done: {len(todo) - len(errors)} ok, {len(errors)} failed")
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     main()
